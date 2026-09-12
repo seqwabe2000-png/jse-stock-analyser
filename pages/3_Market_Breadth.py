@@ -1,10 +1,12 @@
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from src import data, indicators
+from src import relative_performance as rp
 from src.common import bootstrap
-from src.theme import DOWN, UP
+from src.theme import ACCENT, DOWN, MUTED, UP
 
 bootstrap("Market Breadth", "🌡️")
 
@@ -127,3 +129,69 @@ st.dataframe(industry_breadth, hide_index=True, width="stretch", height=420)
 
 with st.expander("Show underlying stock-level data"):
     st.dataframe(breadth_df.sort_values(col_name, ascending=False), hide_index=True, width="stretch")
+
+# --------------------------------------------------------------------------
+# Cyclical vs. Defensive index -- a sector-rotation / risk-on-risk-off gauge:
+# a cap-weighted index of cyclical-sector stocks divided by a cap-weighted
+# index of defensive-sector stocks, rebased to 100 at the start of the window.
+# --------------------------------------------------------------------------
+st.divider()
+st.subheader("Cyclical vs. Defensive Index")
+st.caption(
+    "A cap-weighted index of cyclical-sector stocks divided by a cap-weighted index of "
+    "defensive-sector stocks, rebased to 100 at the start of the window. Rising = cyclicals "
+    "outperforming (often read as 'risk-on'); falling = defensives outperforming "
+    "('risk-off' / flight to safety)."
+)
+
+with st.expander("Which sectors count as cyclical vs. defensive?"):
+    st.markdown(
+        f"**Cyclical:** {', '.join(rp.CYCLICAL_SECTORS)}\n\n"
+        f"**Defensive:** {', '.join(rp.DEFENSIVE_SECTORS)}\n\n"
+        "This is a standard sector-rotation grouping, not an official JSE index -- cyclicals "
+        "swing more with the economic cycle (retail, industrials, mining, banks, property, "
+        "tech, energy); defensives tend to sell roughly the same amount regardless of the "
+        "economy (food & staples, healthcare, utilities, telecoms/media)."
+    )
+
+cd_period = st.selectbox("History window", ["6mo", "1y", "2y", "5y"], index=1, key="cd_period")
+run_cd = st.button("Compute Cyclical vs. Defensive index", type="primary", key="run_cd")
+
+if run_cd:
+    cd_universe = universe[universe["gics_sector"].isin(rp.CYCLICAL_SECTORS + rp.DEFENSIVE_SECTORS)]
+    cd_progress = st.progress(0.0, text="Fetching price data...")
+
+    def _cd_cb(done, total):
+        cd_progress.progress(done / total, text=f"Fetching price data... chunk {done}/{total}")
+
+    cd_hist = data.get_history_bulk(cd_universe["yf_ticker"].tolist(), period=cd_period, interval="1d", progress_cb=_cd_cb)
+    cd_progress.empty()
+    st.session_state["cd_result"] = rp.cyclical_defensive_ratio(universe, cd_hist)
+    st.session_state["cd_period_used"] = cd_period
+
+if "cd_result" in st.session_state:
+    cd_result = st.session_state["cd_result"]
+    ratio = cd_result["ratio"]
+    if ratio.empty:
+        st.warning("Not enough data to compute the Cyclical vs. Defensive index for this window.")
+    else:
+        last_val = ratio.iloc[-1]
+        cd_m1, cd_m2, cd_m3 = st.columns(3)
+        cd_m1.metric("Cyclical / Defensive index", f"{last_val:.1f}", f"{last_val - 100:+.1f} since window start")
+        cd_m2.metric("Cyclical constituents", cd_result["n_cyclical"])
+        cd_m3.metric("Defensive constituents", cd_result["n_defensive"])
+
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scatter(x=ratio.index, y=ratio.values, mode="lines", line=dict(color=ACCENT, width=2)))
+        fig3.add_hline(y=100, line_dash="dash", line_color=MUTED, annotation_text="Window start", annotation_position="right")
+        fig3.update_layout(
+            height=380,
+            yaxis_title="Cyclical / Defensive (rebased, start = 100)",
+            xaxis_title="",
+            margin=dict(t=10),
+        )
+        st.plotly_chart(fig3, width="stretch")
+        st.caption(
+            f"Window: {st.session_state['cd_period_used']}. Both sides are cap-weighted composites of this "
+            "app's own universe (see the Relative Performance page's caveat on constructed indices)."
+        )
