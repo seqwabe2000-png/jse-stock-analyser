@@ -140,6 +140,85 @@ def cap_weighted_index(hist: dict, subset: pd.DataFrame, price_col: str = "Adj C
     return (1 + avg_return).cumprod() * 100
 
 
+# --------------------------------------------------------------------------
+# Cyclical vs. defensive sector rotation gauge (Market Breadth page)
+# --------------------------------------------------------------------------
+# Standard sector-rotation grouping: "cyclical" sectors swing more with the
+# economic cycle (spending on cars/retail/travel, industrial output,
+# commodity prices, credit growth, building activity, tech capex); "defensive"
+# sectors keep selling roughly the same amount in a downturn (food, medicine,
+# power, phone/data bills) so they tend to hold up better when the economy
+# or the market is under stress. There's no single official JSE version of
+# this split -- this mirrors the grouping commonly used by index providers
+# (e.g. State Street/Fidelity sector-rotation frameworks) applied to the
+# GICS sectors present in this app's universe.
+CYCLICAL_SECTORS = [
+    "Consumer Discretionary",
+    "Financials",
+    "Industrials",
+    "Materials",
+    "Information Technology",
+    "Real Estate",
+    "Energy",
+]
+DEFENSIVE_SECTORS = [
+    "Consumer Staples",
+    "Health Care",
+    "Utilities",
+    "Communication Services",
+]
+
+
+def cyclical_defensive_ratio(universe: pd.DataFrame, hist: dict) -> dict:
+    """Builds a cap-weighted index of CYCLICAL_SECTORS and a cap-weighted
+    index of DEFENSIVE_SECTORS from `hist` (as returned by
+    data.get_history_bulk for the relevant tickers), then divides one by the
+    other and rebases the ratio to 100 at the start of the available window.
+
+    Reads as a classic risk-on/risk-off gauge: the ratio rising means
+    cyclical stocks are outperforming defensive ones (often coincides with
+    "risk-on"/economic-optimism conditions); the ratio falling means
+    defensives are outperforming (often "risk-off"/flight-to-safety
+    conditions). It says nothing on its own about the *level* of the market,
+    only which style of sector is leading.
+
+    Returns a dict with keys: "ratio" (the rebased ratio Series, empty if it
+    couldn't be computed), "cyclical" / "defensive" (each sector group's own
+    cap-weighted index level, for reference), "cyclical_sectors" /
+    "defensive_sectors" (the sector lists used), and "n_cyclical" /
+    "n_defensive" (how many universe constituents fed each side).
+    """
+    cyc_subset = universe[universe["gics_sector"].isin(CYCLICAL_SECTORS)]
+    def_subset = universe[universe["gics_sector"].isin(DEFENSIVE_SECTORS)]
+
+    cyc_index = cap_weighted_index(hist, cyc_subset)
+    def_index = cap_weighted_index(hist, def_subset)
+
+    result = {
+        "ratio": pd.Series(dtype=float),
+        "cyclical": cyc_index,
+        "defensive": def_index,
+        "cyclical_sectors": CYCLICAL_SECTORS,
+        "defensive_sectors": DEFENSIVE_SECTORS,
+        "n_cyclical": len(cyc_subset),
+        "n_defensive": len(def_subset),
+    }
+    if cyc_index.empty or def_index.empty:
+        return result
+
+    combined = pd.concat({"cyc": cyc_index, "def": def_index}, axis=1).dropna()
+    if combined.empty:
+        return result
+
+    raw_ratio = combined["cyc"] / combined["def"]
+    raw_ratio = raw_ratio.replace([np.inf, -np.inf], np.nan).dropna()
+    if raw_ratio.empty:
+        return result
+
+    result["ratio"] = raw_ratio / raw_ratio.iloc[0] * 100
+    return result
+
+
 def normalize_pct(series: pd.Series) -> pd.Series:
     """Rebase a price/level series to cumulative % change from its first
     valid value -- matches the 0%-at-left-edge convention of the reference
