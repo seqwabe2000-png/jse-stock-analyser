@@ -6,7 +6,7 @@ import streamlit as st
 from src import data, indicators
 from src import relative_performance as rp
 from src.common import bootstrap
-from src.theme import ACCENT, DOWN, MUTED, UP
+from src.theme import ACCENT, ACCENT_2, DOWN, MUTED, UP
 
 bootstrap("Market Breadth", "🌡️")
 
@@ -66,6 +66,7 @@ if run:
     breadth_df = pd.DataFrame(rows)
     st.session_state["breadth_df"] = breadth_df
     st.session_state["breadth_sma"] = sma_window
+    st.session_state["breadth_history"] = indicators.breadth_time_series(hist, sma_window)
 
 if "breadth_df" not in st.session_state:
     st.info("Click **Run breadth scan** to compute breadth for the selected universe.")
@@ -129,6 +130,50 @@ st.dataframe(industry_breadth, hide_index=True, width="stretch", height=420)
 
 with st.expander("Show underlying stock-level data"):
     st.dataframe(breadth_df.sort_values(col_name, ascending=False), hide_index=True, width="stretch")
+
+# --------------------------------------------------------------------------
+# Breadth over time -- how the % of stocks above their SMA has moved across
+# the scan's own history window, not just the current snapshot. Built from
+# the same price data already fetched above, no extra network calls.
+# --------------------------------------------------------------------------
+st.subheader("Breadth over time")
+breadth_history = st.session_state.get("breadth_history", pd.Series(dtype=float))
+if breadth_history.empty:
+    st.info(
+        "Not enough history in this scan's data to chart breadth over time yet "
+        f"(needs more than {sma_window} bars per stock)."
+    )
+else:
+    fig_hist = go.Figure()
+    fig_hist.add_trace(
+        go.Scatter(
+            x=breadth_history.index,
+            y=breadth_history.values,
+            mode="lines",
+            line=dict(color=ACCENT_2, width=1.5),
+            fill="tozeroy",
+            fillcolor="rgba(61, 139, 255, 0.12)",
+            name=f"% above {sma_window}-SMA",
+        )
+    )
+    fig_hist.add_hline(y=50, line_dash="dash", line_color=MUTED, annotation_text="50%", annotation_position="right")
+    fig_hist.add_hline(y=80, line_dash="dot", line_color=UP, opacity=0.6, annotation_text="80% (broad strength)", annotation_position="right")
+    fig_hist.add_hline(y=20, line_dash="dot", line_color=DOWN, opacity=0.6, annotation_text="20% (broad weakness)", annotation_position="right")
+    fig_hist.update_layout(
+        height=380,
+        yaxis_title=f"% of stocks above {sma_window}-SMA",
+        yaxis_range=[0, 100],
+        xaxis_title="",
+        xaxis=dict(rangeslider=dict(visible=True, thickness=0.06)),
+        margin=dict(t=10),
+    )
+    st.plotly_chart(fig_hist, width="stretch")
+    st.caption(
+        "How broad-based the market's above/below-SMA split has been over time for this scan's universe "
+        "(computed from the same price history fetched above -- no extra data pulled). Readings near 80%+ "
+        "mean most stocks are participating in a rally; readings near 20% or below mean a selloff is broad "
+        "and few stocks are holding up. Drag the range slider underneath the chart to zoom into a period."
+    )
 
 # --------------------------------------------------------------------------
 # Cyclical vs. Defensive index -- a sector-rotation / risk-on-risk-off gauge:
