@@ -59,6 +59,39 @@ def pct_above_sma(df: pd.DataFrame, window: int = 200, price_col: str = "Close")
     return bool(df[price_col].iloc[-1] > s.iloc[-1])
 
 
+def breadth_time_series(hist: dict, window: int = 200, price_col: str = "Close", min_sample: int = 5) -> pd.Series:
+    """For each trading day, the % of the given tickers' cached histories
+    that were trading above their own SMA(window) on that day -- the
+    "breadth over time" line (e.g. the classic "% of stocks above their
+    200-day moving average" chart), built entirely from data already
+    fetched for a single snapshot breadth scan (no extra network calls).
+
+    `hist` is a {ticker: OHLCV DataFrame} dict as returned by
+    data.get_history_bulk. A ticker only contributes to a given day once it
+    has `window` bars of history; days where fewer than `min_sample`
+    tickers have a value are dropped (avoids a noisy, meaningless % at the
+    very start of the window when almost nothing has a valid SMA yet).
+    Returns a Series (0-100) indexed by date, empty if nothing qualifies.
+    """
+    above_cols = {}
+    for ticker, df in hist.items():
+        if df is None or df.empty or price_col not in df.columns or len(df) <= window:
+            continue
+        close = df[price_col]
+        s = sma(close, window)
+        above = (close > s).astype(float)
+        above[s.isna() | close.isna()] = np.nan
+        above_cols[ticker] = above
+
+    if not above_cols:
+        return pd.Series(dtype=float)
+
+    combined = pd.concat(above_cols, axis=1).sort_index()
+    sample_count = combined.notna().sum(axis=1)
+    pct_above = combined.mean(axis=1, skipna=True) * 100
+    return pct_above[sample_count >= min_sample]
+
+
 # --------------------------------------------------------------------------
 # True Range % (ATRP template semantics: MAX(H-L, |H-PrevClose|, |PrevClose-L|) / Open)
 # --------------------------------------------------------------------------
