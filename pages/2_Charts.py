@@ -1,3 +1,4 @@
+from dateutil.relativedelta import relativedelta
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
@@ -5,6 +6,7 @@ from plotly.subplots import make_subplots
 from src import data, indicators
 from src.common import bootstrap
 from src.theme import ACCENT, ACCENT_2, DOWN, MUTED, UP
+from src.ui import range_bar_html
 
 bootstrap("Charts", "📈")
 
@@ -70,12 +72,43 @@ if show_sr or show_trendlines:
         trend_low = indicators.fit_trend_line(swing_lows)
 
 last, pct = data.last_price_change(df)
+
+# 52-week window by actual date (not a fixed bar count), so this stays
+# correct regardless of whether the chart interval above is daily, weekly,
+# or monthly -- and uses the bar's High/Low (not just Close), which is the
+# usual definition of a "52-week high/low" on most quote screens.
+cutoff_52w = df.index.max() - relativedelta(years=1)
+window_52w = df[df.index >= cutoff_52w]
+high_52w = window_52w["High"].max() if not window_52w.empty else float("nan")
+low_52w = window_52w["Low"].min() if not window_52w.empty else float("nan")
+
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Last Close (ZAR c)", f"{last:,.0f}" if last is not None else "—", f"{pct:+.2f}%" if pct is not None else None)
-m2.metric("52w High", f"{df['Close'].tail(252).max():,.0f}")
-m3.metric("52w Low", f"{df['Close'].tail(252).min():,.0f}")
+m2.metric("52w High", f"{high_52w:,.0f}" if high_52w == high_52w else "—")
+m3.metric("52w Low", f"{low_52w:,.0f}" if low_52w == low_52w else "—")
 above200 = indicators.pct_above_sma(df, 200)
 m4.metric("Above 200-SMA", "Yes" if above200 else ("No" if above200 is False else "—"))
+
+# --------------------------------------------------------------------------
+# Day's/period range + 52-week range bars -- a quick visual read of where
+# the current price sits within its recent range, like the range bars on
+# most broker/quote apps.
+# --------------------------------------------------------------------------
+range_period_label = {"1d": "Day's", "1wk": "Week's", "1mo": "Month's"}.get(interval, "Period")
+last_high = df["High"].iloc[-1] if not df.empty else None
+last_low = df["Low"].iloc[-1] if not df.empty else None
+
+rc1, rc2 = st.columns(2)
+with rc1:
+    st.markdown(
+        range_bar_html(last_low, last_high, last, f"{range_period_label} Range", decimals=0),
+        unsafe_allow_html=True,
+    )
+with rc2:
+    st.markdown(
+        range_bar_html(low_52w, high_52w, last, "52-Week Range", decimals=0),
+        unsafe_allow_html=True,
+    )
 
 st.download_button(
     "⬇️ Download OHLCV (CSV)",
