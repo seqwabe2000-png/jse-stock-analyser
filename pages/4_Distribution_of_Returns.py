@@ -11,8 +11,9 @@ bootstrap("Distribution of Returns", "📉")
 
 st.title("📉 Distribution of Returns")
 st.caption(
-    "Reproduces the stats in DoR_Template.xlsx -- Close-to-Close, High-to-Low, and Open-to-Close "
-    "return distributions, with the same descriptive-statistics block and histogram bins."
+    "Reproduces the stats in DoR_Template.xlsx -- Close-to-Close, High-to-Low, Open-to-Close, and "
+    "Close-to-Open (overnight) return distributions, with the same descriptive-statistics block and "
+    "histogram bins."
 )
 
 universe = data.load_universe()
@@ -38,10 +39,20 @@ with c4:
 
 return_type = st.radio(
     "Return series",
-    ["C-C Return (Close-to-Close)", "H-L Return (High-to-Low)", "O-C Return (Open-to-Close)"],
+    [
+        "C-C Return (Close-to-Close)",
+        "H-L Return (High-to-Low)",
+        "O-C Return (Open-to-Close)",
+        "C-O Return (Close-to-Open, overnight)",
+    ],
     horizontal=True,
 )
-return_col = {"C-C": "C-C Return", "H-L": "H-L Return", "O-C": "O-C Return"}[return_type.split(" ")[0]]
+return_col = {
+    "C-C": "C-C Return",
+    "H-L": "H-L Return",
+    "O-C": "O-C Return",
+    "C-O": "C-O Return",
+}[return_type.split(" ")[0]]
 
 # --------------------------------------------------------------------------
 # Data
