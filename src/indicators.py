@@ -149,6 +149,10 @@ def compute_returns(df: pd.DataFrame) -> pd.DataFrame:
     out["C-C Return"] = df["Adj Close"].pct_change()
     out["H-L Return"] = (df["High"] - df["Low"]) / df["Low"]
     out["O-C Return"] = (df["Close"] - df["Open"]) / df["Open"]
+    # Overnight gap: today's Open vs. the *previous* bar's Close -- captures
+    # jumps that happen between sessions (news, results releases, overseas
+    # market moves) rather than intraday moves.
+    out["C-O Return"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
     return out.dropna(how="all")
 
 
