@@ -462,3 +462,137 @@ def fit_trend_line(swing_points: pd.Series, n_points: int = 3):
     slope, intercept = np.polyfit(x_ord, y, 1)
     x0 = x_ord.min()
     return {"slope": slope, "intercept": intercept, "x0_ordinal": x0, "start_date": pts.index.min()}
+
+
+# --------------------------------------------------------------------------
+# Seasonality
+# --------------------------------------------------------------------------
+MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+# Rough cumulative trading-day boundaries for a 252-trading-day year (21/month
+# on average) -- used only to put month labels on the trading-day-of-year axis
+# of the seasonal average path chart below. It's an approximation (real month
+# lengths in trading days vary slightly year to year); good enough for axis
+# labelling, not used in any calculation.
+_APPROX_MONTH_START_TDAY = [1 + round(21 * i) for i in range(12)]
+
+
+def monthly_returns_table(df: pd.DataFrame, price_col: str = "Adj Close") -> pd.DataFrame:
+    """Year x Month grid of calendar-month % returns (month-end to month-end),
+    plus a 'Year' column with that year's compounded return across the months
+    actually present (so a partial first/last year is compounded over
+    however many months it has, not distorted by treating missing months as
+    0%). Rows are calendar years, columns are Jan..Dec + Year."""
+    close = df[price_col].dropna()
+    if close.empty:
+        return pd.DataFrame()
+    monthly = close.resample("ME").last()
+    rets = monthly.pct_change().dropna()
+    if rets.empty:
+        return pd.DataFrame()
+
+    long = pd.DataFrame({"Year": rets.index.year, "Month": rets.index.month, "Return": rets.values})
+    pivot = long.pivot(index="Year", columns="Month", values="Return")
+    pivot = pivot.reindex(columns=range(1, 13))
+    pivot.columns = MONTH_NAMES
+
+    def _year_total(row):
+        vals = row.dropna()
+        if vals.empty:
+            return np.nan
+        return float((1 + vals).prod() - 1)
+
+    pivot["Year"] = pivot[MONTH_NAMES].apply(_year_total, axis=1)
+    return pivot
+
+
+def monthly_seasonality_stats(monthly_pivot: pd.DataFrame) -> pd.DataFrame:
+    """Summarise each calendar month across all years in a monthly_returns_table
+    pivot: average/median/std return, hit rate (% of years positive), and
+    how many years of data went into it."""
+    rows = []
+    for m in MONTH_NAMES:
+        s = monthly_pivot[m].dropna() if m in monthly_pivot else pd.Series(dtype=float)
+        if s.empty:
+            rows.append({"Month": m, "Avg Return": np.nan, "Median Return": np.nan,
+                         "Std Dev": np.nan, "% Positive": np.nan, "Years": 0})
+        else:
+            rows.append({
+                "Month": m,
+                "Avg Return": s.mean(),
+                "Median Return": s.median(),
+                "Std Dev": s.std(),
+                "% Positive": (s > 0).mean() * 100,
+                "Years": int(s.count()),
+            })
+    return pd.DataFrame(rows)
+
+
+def weekday_seasonality_stats(df: pd.DataFrame, price_col: str = "Adj Close") -> pd.DataFrame:
+    """Average daily return by weekday (Mon-Fri) -- meaningful only for daily
+    bars; a day-of-week effect on weekly/monthly bars wouldn't mean anything."""
+    close = df[price_col].dropna()
+    daily_ret = close.pct_change().dropna()
+    if daily_ret.empty:
+        return pd.DataFrame()
+    wd = daily_ret.index.dayofweek
+    rows = []
+    for i, name in enumerate(WEEKDAY_NAMES):
+        s = daily_ret[wd == i]
+        if s.empty:
+            rows.append({"Day": name, "Avg Return": np.nan, "% Positive": np.nan, "Count": 0})
+        else:
+            rows.append({
+                "Day": name,
+                "Avg Return": s.mean(),
+                "% Positive": (s > 0).mean() * 100,
+                "Count": int(s.count()),
+            })
+    return pd.DataFrame(rows)
+
+
+def seasonal_average_path(df: pd.DataFrame, price_col: str = "Adj Close", min_days: int = 20):
+    """Each calendar year's cumulative % path from that year's first trading
+    day (rebased to 0%), aligned by trading-day-of-year (1, 2, 3, ...) rather
+    than calendar date -- so leap years / holiday-shifted weekends don't
+    misalign the comparison. Averaging these across years gives the classic
+    'seasonality chart' shape of how the price typically moves through the
+    year. Years with fewer than `min_days` trading days (partial current
+    year, or a listing's first year) are dropped from the average.
+
+    Returns (paths, avg_path):
+        paths    -- dict[int year] -> pd.Series indexed by trading-day-of-year
+        avg_path -- pd.Series indexed by trading-day-of-year (mean across years)
+    """
+    close = df[price_col].dropna()
+    if close.empty:
+        return {}, pd.Series(dtype=float)
+
+    paths = {}
+    for year, yearly in close.groupby(close.index.year):
+        if len(yearly) < min_days:
+            continue
+        base = yearly.iloc[0]
+        if base == 0 or np.isnan(base):
+            continue
+        pct_path = (yearly / base - 1) * 100
+        pct_path.index = range(1, len(pct_path) + 1)
+        paths[int(year)] = pct_path
+
+    if not paths:
+        return {}, pd.Series(dtype=float)
+
+    combined = pd.concat(paths.values(), axis=1)
+    combined.columns = list(paths.keys())
+    avg_path = combined.mean(axis=1, skipna=True)
+    return paths, avg_path
+
+
+def current_trading_day_of_year(as_of=None) -> int:
+    """Rough estimate of 'today' expressed on the same trading-day-of-year
+    axis as seasonal_average_path (used to draw a 'you are here' marker),
+    scaling the calendar day-of-year down by ~252/365 trading days per
+    calendar day. An approximation, not a real trading-calendar lookup."""
+    as_of = as_of or pd.Timestamp.today()
+    return max(1, round(as_of.timetuple().tm_yday * (252 / 365)))
