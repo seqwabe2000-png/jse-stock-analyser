@@ -72,11 +72,26 @@ def _parse_number(text: str):
 def fetch_sens(symbol: str = None, days: int = 60, max_rows: int = 200) -> pd.DataFrame:
     """SENS headlines for a specific JSE share code (e.g. "NPN"), or the
     market-wide feed if symbol is None. Returns an empty DataFrame (never
-    raises) if the page can't be reached or parsed."""
+    raises) if the page can't be reached or parsed.
+
+    NOTE: the per-company filter param is "scode" (verified against
+    Sharenet's live site -- e.g. sens.php?scode=SHP correctly returns only
+    Shoprite's own announcements). An earlier version of this function sent
+    "sharecode" instead, which Sharenet silently ignores as an unrecognised
+    parameter, so it fell back to the full market-wide feed for every
+    stock -- meaning every page using this (Event Study, SENS & News) was
+    scoring/displaying announcements for random unrelated JSE companies
+    rather than the selected stock's own news. Also worth knowing: without
+    a MySharenet subscription, the live site only exposes a handful of a
+    company's most recent announcements (it's paywalled beyond that), so
+    even correctly filtered results may be sparse for a quiet stock or a
+    long lookback window -- that's a source limitation, not a bug here.
+    A defensive client-side filter below guards against the source ever
+    mixing in other companies' rows again."""
     cols = ["datetime", "code", "headline", "url", "price", "move", "pct_move"]
     params = {}
     if symbol:
-        params["sharecode"] = symbol
+        params["scode"] = symbol
 
     try:
         resp = requests.get(SENS_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
@@ -169,6 +184,27 @@ def fetch_sens(symbol: str = None, days: int = 60, max_rows: int = 200) -> pd.Da
                 break
 
         df = pd.DataFrame(rows, columns=cols)
+
+        # Defensive safety net: even though "scode" correctly filters on
+        # Sharenet's live site (verified directly), don't fully trust a
+        # scraped third-party page to keep doing so forever. If we asked
+        # for one company and rows with a *different*, non-blank code came
+        # back, drop them rather than silently mixing another company's
+        # announcements into this stock's event study / news feed. Rows
+        # with no code detected (market-wide notices, listings, etc. --
+        # which a correctly-scoped fetch shouldn't return anyway) are left
+        # out of a per-symbol request too, since they aren't this company's
+        # own announcements.
+        if symbol and not df.empty:
+            sym = symbol.strip().upper()
+            matched = df[df["code"].str.strip().str.upper() == sym]
+            if not matched.empty:
+                df = matched
+            # If nothing has a matching code (e.g. the scraper's code-column
+            # detection missed on this particular page layout), fall back
+            # to the unfiltered rows rather than returning nothing -- an
+            # imperfect result beats silently hiding real announcements.
+
         if not df.empty:
             df = df.sort_values("datetime", ascending=False).reset_index(drop=True)
         return df
