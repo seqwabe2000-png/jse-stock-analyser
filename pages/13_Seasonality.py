@@ -130,11 +130,13 @@ st.subheader("Monthly returns by year")
 if monthly_pivot.empty:
     st.info("Not enough data to build a monthly returns grid.")
 else:
-    heat = monthly_pivot[indicators.MONTH_NAMES].sort_index(ascending=False)
+    heat_avg = indicators.append_grid_averages(monthly_pivot[indicators.MONTH_NAMES])
+    year_rows = heat_avg.drop(index="Avg").sort_index(ascending=False)
+    heat = pd.concat([year_rows, heat_avg.loc[["Avg"]]])
     z = heat.values * 100
     fig_heat = go.Figure(data=go.Heatmap(
         z=z,
-        x=indicators.MONTH_NAMES,
+        x=indicators.MONTH_NAMES + ["Avg"],
         y=[str(y) for y in heat.index],
         colorscale=[[0, DOWN], [0.5, "#1A1F2B"], [1, UP]],
         zmid=0,
@@ -148,7 +150,45 @@ else:
     st.plotly_chart(fig_heat, width="stretch")
     st.caption(
         "Each cell is that calendar month's % return (month-end to month-end). Blank cells mean no "
-        "data for that month (e.g. the stock's listing year, or the current partial year)."
+        "data for that month (e.g. the stock's listing year, or the current partial year). The 'Avg' "
+        "column is each year's average monthly return; the 'Avg' row is each calendar month's average "
+        "return across all years."
+    )
+
+st.divider()
+
+# --------------------------------------------------------------------------
+# Weekly returns by year
+# --------------------------------------------------------------------------
+st.subheader("Weekly returns by year")
+weekly_pivot = indicators.weekly_returns_table(raw)
+if weekly_pivot.empty:
+    st.info("Not enough data to build a weekly returns grid.")
+else:
+    weekly_heat_avg = indicators.append_grid_averages(weekly_pivot)
+    weekly_year_rows = weekly_heat_avg.drop(index="Avg").sort_index(ascending=False)
+    weekly_heat = pd.concat([weekly_year_rows, weekly_heat_avg.loc[["Avg"]]])
+    wz = weekly_heat.values * 100
+    fig_weekly_heat = go.Figure(data=go.Heatmap(
+        z=wz,
+        x=indicators.WEEK_COLUMNS + ["Avg"],
+        y=[str(y) for y in weekly_heat.index],
+        colorscale=[[0, DOWN], [0.5, "#1A1F2B"], [1, UP]],
+        zmid=0,
+        hovertemplate="%{y} %{x}: %{z:.2f}%<extra></extra>",
+        colorbar=dict(title="Return", tickformat=".0f", ticksuffix="%"),
+    ))
+    shown_week_ticks = [indicators.WEEK_COLUMNS[i] for i in range(0, 53, 4)]
+    fig_weekly_heat.update_layout(
+        height=max(320, 22 * len(weekly_heat) + 80), xaxis_title="", yaxis_title="",
+        xaxis=dict(tickmode="array", tickvals=shown_week_ticks + ["Avg"], ticktext=shown_week_ticks + ["Avg"]),
+    )
+    st.plotly_chart(fig_weekly_heat, width="stretch")
+    st.caption(
+        "Each cell is that ISO week's % return (Friday close to Friday close) -- W1 is the first ISO "
+        "week of the year. With 53 columns there isn't room to label every cell, so hover over one to "
+        "see its exact value. Same 'Avg' row/column as the monthly grid above: average per year on the "
+        "right, average per calendar week across all years on the bottom."
     )
 
 st.divider()
