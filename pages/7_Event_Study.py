@@ -17,6 +17,12 @@ st.markdown(
     "price path before and after it, or look at the average pattern across all the big ones.</div>",
     unsafe_allow_html=True,
 )
+st.caption(
+    "SENS headlines come from Sharenet's free public page, which only exposes a company's most recent "
+    "handful of announcements without a paid subscription -- so even a large \"how far back\" setting "
+    "below may only turn up a few announcements for a quiet stock. That's a limit of the free source, "
+    "not a bug in this tool."
+)
 st.write("")
 
 universe = data.load_universe()
