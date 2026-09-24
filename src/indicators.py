@@ -507,6 +507,54 @@ def monthly_returns_table(df: pd.DataFrame, price_col: str = "Adj Close") -> pd.
     return pivot
 
 
+WEEK_COLUMNS = [f"W{w}" for w in range(1, 54)]
+
+
+def weekly_returns_table(df: pd.DataFrame, price_col: str = "Adj Close") -> pd.DataFrame:
+    """Year x ISO-week grid of weekly % returns (Friday close to Friday
+    close), the weekly equivalent of monthly_returns_table. Uses the ISO
+    calendar's own year field (not the plain calendar year of the bar's
+    date) to bucket each week, since the last/first few days of December/
+    January sometimes belong to an ISO week assigned to the other calendar
+    year -- getting this wrong would file a return under the wrong row.
+    Rows are ISO years, columns are W1..W53 (a year with only 52 ISO weeks
+    just leaves W53 blank)."""
+    close = df[price_col].dropna()
+    if close.empty:
+        return pd.DataFrame()
+    weekly = close.resample("W-FRI").last()
+    rets = weekly.pct_change().dropna()
+    if rets.empty:
+        return pd.DataFrame()
+
+    iso = rets.index.isocalendar()
+    long = pd.DataFrame({"Year": iso["year"].to_numpy(), "Week": iso["week"].to_numpy(), "Return": rets.values})
+    pivot = long.pivot_table(index="Year", columns="Week", values="Return", aggfunc="mean")
+    pivot = pivot.reindex(columns=range(1, 54))
+    pivot.columns = WEEK_COLUMNS
+    return pivot
+
+
+def append_grid_averages(pivot: pd.DataFrame) -> pd.DataFrame:
+    """Pure display helper for the seasonality heatmaps: given a Year x
+    <period> returns grid (just the period columns -- e.g.
+    monthly_pivot[MONTH_NAMES], or a weekly_returns_table() result),
+    appends a plain-average 'Avg' column on the right (each year's average
+    return across whichever of that grid's periods it has data for) and a
+    plain-average 'Avg' row on the bottom (each period's average return
+    across all years, including averaging the new 'Avg' column itself --
+    i.e. the grid's overall average). Doesn't touch or replace any of the
+    other per-period stats used elsewhere on the page; this only feeds the
+    heatmap's own row/column of totals."""
+    if pivot.empty:
+        return pivot
+    out = pivot.copy()
+    out["Avg"] = out.mean(axis=1, skipna=True)
+    avg_row = out.mean(axis=0, skipna=True)
+    avg_row.name = "Avg"
+    return pd.concat([out, avg_row.to_frame().T])
+
+
 def monthly_seasonality_stats(monthly_pivot: pd.DataFrame) -> pd.DataFrame:
     """Summarise each calendar month across all years in a monthly_returns_table
     pivot: average/median/std return, hit rate (% of years positive), and
