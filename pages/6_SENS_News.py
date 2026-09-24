@@ -8,7 +8,9 @@ bootstrap("SENS & News", "📰")
 st.title("📰 SENS Announcements & News")
 st.caption(
     "Best-effort feed -- SENS headlines are scraped from Sharenet's public SENS page (no free official "
-    "JSE SENS API exists) and news comes from Google News. If a section below comes up empty, run "
+    "JSE SENS API exists) and news comes from Google News. Sharenet's free page only exposes a "
+    "company's most recent handful of announcements without a paid subscription, so a long lookback "
+    "may still show only a few results for a quiet stock. If a section below comes up empty, run "
     "`python3 scripts/test_sens_connection.py` to check whether the source is reachable/still working."
 )
 
