@@ -44,20 +44,48 @@ from src import data
 BROAD_INDEX_CANDIDATES = {
     "JSE All Share": ["^J203.JO"],          # confirmed working
     "JSE Top 40": ["^J200.JO"],             # confirmed working
-    "JSE Mid Cap": ["J201.L"],              # unverified -- London cross-listing
+    "JSE Mid Cap": ["^J201.JO", "J201.L"],  # unverified -- ^J201.JO added per user-supplied ticker list
     "JSE Small Cap": ["J202.L"],            # unverified -- London cross-listing
+    # -- Below: added from a ticker list the user supplied (research done
+    # elsewhere, not on this machine). Same rule as everything else in this
+    # file: nothing here is confirmed working until it's actually returned
+    # data via scripts/test_data_connection.py. Where the user's list also
+    # gave a JSE-listed ETF that tracks the index (Satrix/10X), that's tried
+    # FIRST -- an ETF is an ordinary equity on the same data path the rest
+    # of this app already relies on, so it's more likely to actually
+    # resolve than an obscure raw index-only ticker.
+    "JSE SWIX All Share": ["^J433.JO"],                 # FTSE/JSE SWIX All Share (FTJ433) -- no sane constructed fallback (different weighting methodology to cap-weighted), so an unresolved ticker here just falls through to the generic whole-universe fallback below
+    "JSE Capped SWIX Top 40": ["^J403N.JO"],            # FTSE/JSE SW T40 Net TR (JDTPN)
+    "JSE SWIX Top 40": ["STXSWX.JO", "^J403.JO"],       # FTSE/JSE SA Shareholder Weighted Top 40 (JDTOP)
+    "JSE Large Cap": ["^J205.JO"],                      # FTSE/JSE Large Cap (FTJ205)
+    "JSE Global Investor Price Index": ["^J501.JO"],    # FTSE/JSE Global Investor Price Index (FTJ501)
+    "JSE Capped RAFI All Share": ["STXRAF.JO", "^J263.JO"],  # FTSE JSE Capped RAFI All Share (JCRAFI)
+    "JSE Resource 10": ["STXRES.JO", "^J210.JO"],       # FTSE/JSE Resource 10 (JRESI)
+    "JSE Financial 15": ["STXFIN.JO", "^J212.JO"],      # FTSE/JSE Financial 15 (JFINI)
+    "JSE Industrial 25": ["STXIND.JO", "^J211.JO"],     # FTSE/JSE Industrial 25 (JINDI)
+    "JSE Capped Industrial 25": ["^J311.JO"],           # JSE Capped Industrial 25 (JCIND)
 }
 
 SECTOR_INDEX_CANDIDATES = {
-    "Financials": ["^J580.JO"],             # unverified
-    "Real Estate": ["^J253.JO", "J253.L"],  # unverified (SA Listed Property)
+    # Keys must match a real value in universe["gics_sector"] -- that's
+    # what the automatic constructed-fallback in sector_line() filters on.
+    "Financials": ["^J580.JO", "^J5800.JO"],  # unverified -- user's list gave ^J5800.JO (FTJS3011... no, JFINA), kept alongside the original ^J580.JO since they disagree and neither is confirmed
+    "Real Estate": ["^J253.JO", "STXPRO.JO", "^J254.JO", "^J8670.JO", "PTXTEN.JO", "J253.L"],  # SA Listed Property + Capped Property + FTSE JSE Real Estate all bucketed here -- they're closely related property-sector variants, not identical indices
     "Industrials": ["J520.L"],              # unverified -- London cross-listing
+    "Information Technology": ["^J9537.JO"],   # FTSE JSE SA Technology (JTECH) -- "Technology" in the source list, mapped to our closest gics_sector name
+    "Materials": ["^J510.JO"],                 # FTSE JSE SA Basic Materials (JBASM)
+    "Energy": ["^J5000.JO", "^J6011.JO"],      # FTSE JSE SA Oil & Gas (JOILG) + Oil & Gas Producers (FTJS6011)
+    "Consumer Discretionary": ["^J5300.JO"],   # FTSE JSE SA Consumer Services (JCONS) -- approximate mapping, our universe doesn't have a separate "Consumer Services" GICS sector
+    "Health Care": ["^J4500.JO"],              # FTSE JSE SA Health Care (JHEAL)
 }
 
 INDUSTRY_INDEX_CANDIDATES = {
-    "Banks": ["J835.L"],                    # unverified -- London cross-listing
-    "Diversified Mining": ["J177.L"],       # unverified (SA Mining index)
+    # Keys must match a real value in universe["industry"].
+    "Banks": ["STXBNK.JO", "^J835.JO", "J835.L"],       # added STXBNK.JO (Satrix SA Banks ETF) + ^J835.JO ahead of the original London cross-listing
+    "Diversified Mining": ["^J177.JO", "J177.L"],       # added ^J177.JO ahead of the original London cross-listing
     "Gold Mining": ["J150.L"],              # unverified -- London cross-listing
+    "Specialty Chemicals": ["JCHES.JO"],    # JSE Chemicals (JCHES) -- the user's list showed "JCHES.J"; JSE equities use the ".JO" suffix everywhere else in this app, so treating that as a typo rather than copying it verbatim
+    "Paper & Forest Products": ["JFORE.JO"],  # JSE Forestry & Paper (JFORE) -- same ".J" -> ".JO" correction as above
 }
 
 # Which universe subset each broad index falls back to constructing from,
@@ -67,6 +95,16 @@ BROAD_FALLBACK = {
     "JSE Top 40": lambda uni: uni.sort_values("market_cap_zar", ascending=False).head(40),
     "JSE Mid Cap": lambda uni: uni[uni["market_cap_tier"] == "Mid Cap"],
     "JSE Small Cap": lambda uni: uni[uni["market_cap_tier"] == "Small Cap"],
+    "JSE Large Cap": lambda uni: uni[uni["market_cap_tier"].isin(["Mega Cap", "Large Cap"])],
+    "JSE Financial 15": lambda uni: uni[uni["gics_sector"] == "Financials"].sort_values("market_cap_zar", ascending=False).head(15),
+    "JSE Industrial 25": lambda uni: uni[uni["gics_sector"] == "Industrials"].sort_values("market_cap_zar", ascending=False).head(25),
+    "JSE Capped Industrial 25": lambda uni: uni[uni["gics_sector"] == "Industrials"].sort_values("market_cap_zar", ascending=False).head(25),
+    "JSE Resource 10": lambda uni: uni[uni["gics_sector"].isin(["Materials", "Energy"])].sort_values("market_cap_zar", ascending=False).head(10),
+    # Everything else not listed here falls back to the whole universe
+    # (broad_index_line()'s own default) -- honestly labelled "Constructed
+    # (N stocks, cap-weighted)" either way, so it's never silently mislabeled
+    # as the real index, just a same-direction proxy when the real feed
+    # isn't available.
 }
 
 TIMEFRAMES = ["1D", "5D", "MTD", "1M", "QTD", "6M", "YTD", "1Y", "3Y", "5Y", "10Y", "MAX"]
