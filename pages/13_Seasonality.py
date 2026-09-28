@@ -2,12 +2,18 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from dateutil.relativedelta import relativedelta
 
 from src import data, indicators
+from src import relative_performance as rp
 from src.common import bootstrap
 from src.theme import ACCENT, ACCENT_2, DOWN, MUTED, UP
 
 bootstrap("Seasonality", "🗓️")
+
+
+def _hist_lookup(tickers):
+    return data.get_history_bulk(tickers, period="max", interval="1d")
 
 st.title("🗓️ Seasonality")
 st.caption(
@@ -39,9 +45,14 @@ with c2:
         ticker = label_to_ticker[choice]
         display_name = choice.split(" — ")[0]
     else:
-        choice = st.selectbox("Index", options=list(data.BENCHMARKS.keys()), key="szn_index")
-        ticker = data.BENCHMARKS[choice]
-        display_name = choice
+        all_sectors = sorted(universe["gics_sector"].unique())
+        index_options = (
+            [f"Index: {n}" for n in rp.BROAD_INDEX_CANDIDATES.keys()]
+            + [f"Sector: {n}" for n in all_sectors]
+            + [f"Industry: {n}" for n in rp.INDUSTRY_INDEX_CANDIDATES.keys()]
+        )
+        choice = st.selectbox("Index", options=index_options, key="szn_index")
+        display_name = choice.split(": ", 1)[1]
 with c3:
     history_period = st.selectbox("History", ["5y", "10y", "max"], index=2, key="szn_period")
 
@@ -49,8 +60,44 @@ with c3:
 # Data -- always daily bars, regardless of the history length picked, since
 # the weekday / day-of-year breakdowns below need real trading-day
 # granularity (not whatever interval another page might be showing).
+#
+# For a stock this is a plain price fetch. For an index/sector/industry,
+# resolve it through the same best-effort logic as the Relative Performance
+# page (src/relative_performance.py): try known Yahoo Finance ticker
+# candidates for that name first, and if none of them return real data,
+# fall back to a constructed cap-weighted index built from that
+# sector/industry's actual constituent stocks -- so this always shows
+# *something* for any sector/industry, real feed or not. The 'source'
+# caption below always says which kind you're looking at; see that
+# module's docstring for the full caveat on how (un)confirmed these
+# candidate tickers are.
 # --------------------------------------------------------------------------
-raw = data.get_history(ticker, period=history_period, interval="1d")
+source_label = None
+if kind == "Stock":
+    raw = data.get_history(ticker, period=history_period, interval="1d")
+else:
+    with st.spinner(f"Resolving {display_name}..."):
+        if choice.startswith("Index: "):
+            series, source_label = rp.broad_index_line(display_name, universe, _hist_lookup)
+        elif choice.startswith("Sector: "):
+            series, source_label = rp.sector_line(display_name, universe, _hist_lookup)
+        else:
+            industry_sector_matches = universe.loc[universe["industry"] == display_name, "gics_sector"]
+            if industry_sector_matches.empty:
+                series, source_label = pd.Series(dtype=float), "No data"
+            else:
+                series, source_label = rp.industry_line(
+                    industry_sector_matches.iloc[0], display_name, universe, _hist_lookup
+                )
+    series = series.dropna()
+    raw = pd.DataFrame({"Close": series, "Adj Close": series}) if not series.empty else pd.DataFrame()
+    # Slice to the requested history length the same way data.get_history does.
+    if not raw.empty and history_period != "max":
+        cutoff = raw.index.max() - {"5y": relativedelta(years=5), "10y": relativedelta(years=10)}.get(
+            history_period, relativedelta(years=100)
+        )
+        raw = raw[raw.index >= cutoff]
+
 if raw.empty:
     st.error(f"No price data available for {display_name}.")
     st.stop()
@@ -63,9 +110,10 @@ if n_years < 3:
         "available below, but treat it with caution."
     )
 
+source_note = f" -- source: {source_label}" if source_label else ""
 st.caption(
     f"Using {len(raw):,} daily bars from {raw.index.min().date()} to {raw.index.max().date()} "
-    f"({n_years} calendar years)."
+    f"({n_years} calendar years){source_note}."
 )
 
 st.divider()
