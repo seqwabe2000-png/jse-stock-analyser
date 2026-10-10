@@ -1,7 +1,7 @@
 import plotly.graph_objects as go
 import streamlit as st
 
-from src import data, indicators
+from src import data, indicators, instruments
 from src.common import bootstrap
 from src.theme import ACCENT, ACCENT_2, MUTED
 
@@ -10,10 +10,11 @@ bootstrap("ATR %", "📐")
 st.title("📐 Average True Range % (ATRP)")
 st.caption(
     "Reproduces ATRP_Template.xlsx: True Range % = MAX(High−Low, |High−PrevClose|, |PrevClose−Low|) ÷ Open, "
-    "averaged over the same trading-horizon windows as the template (1 week through 50 years)."
+    "averaged over the same trading-horizon windows as the template (1 week through 50 years). Works for "
+    "a JSE index too (pick \"Index\" as the sector filter) -- e.g. the Top 40 or All Share's own ATRP."
 )
 
-universe = data.load_universe()
+universe = instruments.with_indices(data.load_universe())
 
 c1, c2, c3, c4 = st.columns([1.3, 2, 1, 1])
 with c1:
@@ -22,18 +23,19 @@ with c2:
     sector_filter = st.selectbox("Sector filter", ["All sectors"] + sorted(universe["gics_sector"].unique()))
     stock_universe = universe if sector_filter == "All sectors" else universe[universe["gics_sector"] == sector_filter]
 with c3:
-    label_to_ticker = {f"{r['symbol']} — {r['name']}": r["yf_ticker"] for _, r in stock_universe.iterrows()}
-    if not label_to_ticker:
+    label_to_row = {f"{r['symbol']} — {r['name']}": r for _, r in stock_universe.iterrows()}
+    if not label_to_row:
         st.warning("No stocks in this sector.")
         st.stop()
-    choice = st.selectbox("Stock", options=sorted(label_to_ticker.keys()))
-    ticker = label_to_ticker[choice]
+    choice = st.selectbox("Stock / index", options=sorted(label_to_row.keys()))
+    row = label_to_row[choice]
+    ticker = row["yf_ticker"]
 with c4:
     history_period = st.selectbox("History", ["2y", "5y", "10y", "max"], index=2)
 
-raw = data.get_history(ticker, period=history_period, interval="1d")
+raw = instruments.get_history_for_row(row, period=history_period, interval="1d")
 if raw.empty:
-    st.error(f"No price data available for {ticker}.")
+    st.error(f"No price data available for {choice.split(' — ')[0]}.")
     st.stop()
 
 df = raw if timeframe == "Daily" else data.resample_ohlc(raw, {"Weekly": "W", "Monthly": "M", "Quarterly": "Q"}[timeframe])
