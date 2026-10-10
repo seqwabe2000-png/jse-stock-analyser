@@ -135,16 +135,20 @@ with tab_table:
                 )
 
 # --------------------------------------------------------------------------
-# Tab 2: market-cap decomposition tree -- an Icicle chart (Plotly's closest
-# native equivalent to a Power-BI-style decomposition tree: click any tile
-# to drill into it, click the root/breadcrumb to zoom back out, no custom
-# JS needed). You choose which dimension it decomposes by second, after
-# sector -- that's the "decompose by X" interaction this is standing in for.
+# Tab 2: market-cap decomposition tree -- a ranked, uniform-height bar list
+# per level (src.treeviz.drilldown_bar_figure), in a single accent colour
+# with a light "track" behind every bar. Click a bar to drill into it; a
+# new panel appears below showing that branch's own breakdown, exactly like
+# expanding a branch in a Power-BI decomposition tree. This replaced an
+# earlier Icicle-chart version that didn't hold up: Icicle's tile *area* is
+# proportional to value, which gave wildly uneven row heights (some tiles
+# unreadable slivers) and arbitrary per-branch colours, neither of which
+# matched the clean single-colour ranked-bar look of the reference image.
 # --------------------------------------------------------------------------
 with tab_tree:
     st.caption(
-        "Box size = market cap. Click any sector (or tier) to drill into it; click the root label on "
-        "the left, or a tile's own breadcrumb, to zoom back out."
+        "Click a bar to drill into it -- each click reveals that branch's own breakdown below. "
+        "Change \"Decompose by\" or hit ↺ Reset to start over."
     )
     if filtered.empty:
         st.info("No stocks match your filters.")
@@ -155,35 +159,101 @@ with tab_tree:
             "Cap Tier → Sector → Stock": ["market_cap_tier", "gics_sector"],
             "Industry → Stock": ["industry"],
         }
-        path_choice = st.selectbox("Decompose by", list(path_options.keys()), key="tree_path_choice")
+        dim_label = {"gics_sector": "sector", "industry": "industry", "market_cap_tier": "cap tier"}
+        MAX_BARS = 25  # per level, so a level with many categories stays readable
+
+        top_row, reset_row = st.columns([5, 1])
+        with top_row:
+            path_choice = st.selectbox("Decompose by", list(path_options.keys()), key="tree_path_choice")
         path = path_options[path_choice]
 
-        hier = treeviz.build_hierarchy(
-            filtered,
-            path=path,
-            leaf_id_col="symbol",
-            leaf_label_col="symbol",
-            value_col="market_cap_zar",
-            root_label=f"JSE ({len(filtered)} stocks)",
-        )
-        node_text = [treeviz.format_rand(v) for v in hier["values"]]
+        # A new "decompose by" path invalidates any drill-down made under the
+        # old one (e.g. a selected industry doesn't mean anything once you've
+        # switched to grouping by cap tier), so clear it rather than risk
+        # showing a stale, mismatched branch.
+        if st.session_state.get("tree_path_prev") != path_choice:
+            st.session_state["tree_sel1"] = None
+            st.session_state["tree_sel2"] = None
+            st.session_state["tree_path_prev"] = path_choice
 
-        fig_tree = go.Figure(go.Icicle(
-            ids=hier["ids"],
-            labels=hier["labels"],
-            parents=hier["parents"],
-            values=hier["values"],
-            branchvalues="total",
-            tiling=dict(orientation="h"),
-            text=node_text,
-            texttemplate="<b>%{label}</b><br>%{text}",
-            hovertemplate="%{label}<br>%{text}<br>%{percentParent:.1%} of parent<extra></extra>",
-            maxdepth=len(path) + 1,  # root + each chosen level; stock leaves reveal on drill-in
-            root=dict(color=PANEL_2),
-            marker=dict(line=dict(width=1, color=BORDER)),
-        ))
-        fig_tree.update_layout(height=580, margin=dict(t=10, l=10, r=10, b=10), font=dict(size=13))
-        st.plotly_chart(fig_tree, width="stretch")
+        with reset_row:
+            st.write("")  # vertical nudge to roughly align with the selectbox
+            if st.button("↺ Reset", key="tree_reset_btn", disabled=not st.session_state.get("tree_sel1")):
+                st.session_state["tree_sel1"] = None
+                st.session_state["tree_sel2"] = None
+
+        sel1 = st.session_state.get("tree_sel1")
+        sel2 = st.session_state.get("tree_sel2") if len(path) > 1 else None
+        crumbs = [f"JSE ({len(filtered)} stocks)"]
+        if sel1:
+            crumbs.append(sel1)
+        if sel2:
+            crumbs.append(sel2)
+        st.markdown(" → ".join(f"**{c}**" for c in crumbs))
+
+        # --- Level 1: every filtered stock, grouped by the first dimension ---
+        labels1, values1, omitted1 = treeviz.ranked_groups(filtered, path[0], "market_cap_zar", MAX_BARS)
+        st.caption(f"By {dim_label.get(path[0], path[0])} (market cap):")
+        fig1 = treeviz.drilldown_bar_figure(labels1, values1, [treeviz.format_rand(v) for v in values1])
+        event1 = st.plotly_chart(fig1, width="stretch", on_select="rerun", selection_mode="points", key="tree_chart_lvl1")
+        if omitted1:
+            st.caption(f"+ {omitted1} smaller {dim_label.get(path[0], path[0])}(s) not shown -- refine your filters to see them.")
+
+        clicked1 = treeviz.clicked_bar_label(event1)
+        if clicked1 is not None and clicked1 in labels1 and clicked1 != sel1:
+            sel1 = clicked1
+            st.session_state["tree_sel1"] = sel1
+            st.session_state["tree_sel2"] = None
+            sel2 = None
+        elif sel1 is not None and sel1 not in labels1:
+            # The underlying filters changed since this was selected (e.g. the
+            # chosen sector was filtered out) -- self-heal instead of crashing.
+            sel1 = None
+            st.session_state["tree_sel1"] = None
+            st.session_state["tree_sel2"] = None
+            sel2 = None
+
+        # --- Level 2: everything under the selected level-1 branch ---
+        if sel1 is not None:
+            scope1 = filtered[filtered[path[0]].astype(str) == sel1]
+            st.divider()
+            if len(path) > 1:
+                labels2, values2, omitted2 = treeviz.ranked_groups(scope1, path[1], "market_cap_zar", MAX_BARS)
+                st.caption(f"**{sel1}**, by {dim_label.get(path[1], path[1])} (market cap):")
+                fig2 = treeviz.drilldown_bar_figure(labels2, values2, [treeviz.format_rand(v) for v in values2])
+                event2 = st.plotly_chart(
+                    fig2, width="stretch", on_select="rerun", selection_mode="points", key="tree_chart_lvl2"
+                )
+                if omitted2:
+                    st.caption(f"+ {omitted2} smaller {dim_label.get(path[1], path[1])}(s) not shown here.")
+
+                clicked2 = treeviz.clicked_bar_label(event2)
+                if clicked2 is not None and clicked2 in labels2 and clicked2 != sel2:
+                    sel2 = clicked2
+                    st.session_state["tree_sel2"] = sel2
+                elif sel2 is not None and sel2 not in labels2:
+                    sel2 = None
+                    st.session_state["tree_sel2"] = None
+
+                # --- Level 3: individual stocks under the level-2 branch ---
+                if sel2 is not None:
+                    scope2 = scope1[scope1[path[1]].astype(str) == sel2]
+                    st.divider()
+                    labels3, values3, omitted3 = treeviz.ranked_groups(scope2, "symbol", "market_cap_zar", MAX_BARS)
+                    st.caption(f"**{sel1} → {sel2}**, individual stocks:")
+                    fig3 = treeviz.drilldown_bar_figure(labels3, values3, [treeviz.format_rand(v) for v in values3])
+                    st.plotly_chart(fig3, width="stretch", key="tree_chart_lvl3")
+                    if omitted3:
+                        st.caption(f"+ {omitted3} smaller stock(s) not shown here -- see the Table tab for the full list.")
+            else:
+                # Single-dimension path (e.g. "Industry → Stock"): level 2 is
+                # already the individual stocks, no further drill needed.
+                labels2, values2, omitted2 = treeviz.ranked_groups(scope1, "symbol", "market_cap_zar", MAX_BARS)
+                st.caption(f"**{sel1}**, individual stocks:")
+                fig2 = treeviz.drilldown_bar_figure(labels2, values2, [treeviz.format_rand(v) for v in values2])
+                st.plotly_chart(fig2, width="stretch", key="tree_chart_lvl2_leaf")
+                if omitted2:
+                    st.caption(f"+ {omitted2} smaller stock(s) not shown here -- see the Table tab for the full list.")
 
 # --------------------------------------------------------------------------
 # Tab 3: performance treemap -- Sector > Industry > Stock, sized by market
