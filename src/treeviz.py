@@ -130,6 +130,21 @@ def format_rand(value: float) -> str:
 # closely than a partition chart ever could; clicking a bar drills into it,
 # exactly like clicking a branch in that image expands it.
 # --------------------------------------------------------------------------
+def disambiguated_names(df: pd.DataFrame, name_col: str = "name", id_col: str = "symbol") -> pd.Series:
+    """`name_col` values, aligned to df's index, with the id appended in
+    parentheses wherever a name isn't unique within df -- e.g. the JSE's
+    several dual-listed share classes (Investec Group trades as both INL
+    and INP, Sasol Limited as both SOL and SOLBE1, etc.) would otherwise
+    collide: showing "Investec Group" twice with no way to tell the bars
+    apart, or -- worse -- getting summed into one bar by a groupby keyed
+    on the name column instead of the ticker."""
+    dup_mask = df[name_col].duplicated(keep=False)
+    return pd.Series(
+        np.where(dup_mask, df[name_col].astype(str) + " (" + df[id_col].astype(str) + ")", df[name_col].astype(str)),
+        index=df.index,
+    )
+
+
 def ranked_groups(df: pd.DataFrame, group_col: str, value_col: str, max_rows: int = None):
     """Group df by group_col, sum value_col, sort descending by value.
 
