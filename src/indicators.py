@@ -205,6 +205,22 @@ def rolling_volatility(returns: pd.Series, windows) -> pd.DataFrame:
     return out
 
 
+def full_period_beta(stock_returns: pd.Series, bench_returns: pd.Series, min_points: int = 20):
+    """Single beta estimate (slope of stock returns on benchmark returns)
+    over the whole overlapping history -- used where a single point
+    estimate is wanted (e.g. auto-filling the Beta-Neutral Sizing tab)
+    rather than a rolling series. Returns None if there isn't enough
+    overlapping data or the benchmark has ~zero variance."""
+    aligned = pd.concat({"stock": stock_returns, "bench": bench_returns}, axis=1).dropna()
+    if len(aligned) < min_points:
+        return None
+    var = aligned["bench"].var()
+    if not var or var != var:  # zero or NaN
+        return None
+    beta = aligned["stock"].cov(aligned["bench"]) / var
+    return float(beta) if beta == beta else None
+
+
 def rolling_beta_correl(stock_returns: pd.Series, bench_returns: pd.Series, windows) -> dict:
     """windows: list of (label, n) trading-period tuples. Returns
     {label: {"beta": Series, "correl": Series}} aligned on the shared index."""
