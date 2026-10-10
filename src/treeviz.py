@@ -1,19 +1,28 @@
 """
-Shared hierarchy-building helpers for the Screener page's two tree-style
-visualisations:
-  - a market-cap "decomposition tree" (an Icicle trace) you can drill into
-    by sector -> a second dimension of your choice -> individual stocks
+Shared helpers for the Screener page's two tree-style visualisations:
+  - a market-cap "decomposition tree": click-to-drill, ranked horizontal
+    bar lists (one uniform-coloured level at a time -- see
+    ranked_groups/drilldown_bar_figure/clicked_bar_label below), by
+    sector -> a second dimension of your choice -> individual stocks
   - a sector/industry performance treemap (size = market cap, colour =
-    today's % move), in the style of a Finviz/market-map heatmap
+    today's % move), in the style of a Finviz/market-map heatmap, built
+    from build_hierarchy/format_rand below
 
-Both ultimately need the same thing: a flat list of (id, label, parent,
-value[, colour]) rows covering every level of a drill-down path plus the
-leaf stocks, with branch/root values and colours rolled up from their
-children. That rollup is built once here so the two chart-building
-functions in the Screener page don't duplicate the groupby logic.
+An earlier version of the decomposition tree used a single Plotly Icicle
+trace instead -- a partition chart whose tile *area* is proportional to
+value. That gave wildly uneven row heights (small categories squeezed into
+illegible slivers) and arbitrary per-branch colours, and didn't hold up:
+it was replaced with the ranked-bar approach so every row is the same
+height and every bar is the same colour, matching a Power-BI-style
+decomposition tree far more closely. build_hierarchy/format_rand are still
+used for the (unrelated) performance treemap below, where tile area
+genuinely should be proportional to market cap.
 """
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
+
+from src.theme import ACCENT_2, BORDER
 
 
 def _node_id(*parts) -> str:
@@ -109,3 +118,93 @@ def format_rand(value: float) -> str:
     if abs(value) >= 1e9:
         return f"R{value / 1e9:,.1f}bn"
     return f"R{value / 1e6:,.0f}m"
+
+
+# --------------------------------------------------------------------------
+# Click-to-drill "decomposition tree" replacement: instead of an Icicle
+# chart's area-proportional tiles (uneven heights, arbitrary branch colours
+# -- the version the user rejected), each level is drawn as a ranked list of
+# uniform-height horizontal bars in a single accent colour, with a light
+# "track" bar behind every row so the bar length alone conveys relative
+# size. This matches the reference decomposition-tree image far more
+# closely than a partition chart ever could; clicking a bar drills into it,
+# exactly like clicking a branch in that image expands it.
+# --------------------------------------------------------------------------
+def ranked_groups(df: pd.DataFrame, group_col: str, value_col: str, max_rows: int = None):
+    """Group df by group_col, sum value_col, sort descending by value.
+
+    Returns (labels, values, n_omitted): labels/values are parallel lists
+    ready for drilldown_bar_figure, and n_omitted is how many smaller
+    groups were cut off by max_rows (0 if nothing was cut)."""
+    agg = df.groupby(group_col, dropna=False)[value_col].sum().sort_values(ascending=False)
+    n_omitted = 0
+    if max_rows is not None and len(agg) > max_rows:
+        n_omitted = len(agg) - max_rows
+        agg = agg.head(max_rows)
+    labels = [str(x) for x in agg.index]
+    values = agg.values.tolist()
+    return labels, values, n_omitted
+
+
+def drilldown_bar_figure(labels, values, texts=None, color=None, track_color=None, height=None):
+    """A ranked, uniform-row-height horizontal bar list in a single accent
+    colour -- one level of a click-to-drill decomposition tree.
+
+    `labels`/`values`/`texts` should already be sorted the way you want
+    them to appear top-to-bottom; Plotly draws y-categories bottom-to-top,
+    so this reverses the y-axis to match. Each row is two overlaid bars: a
+    light "track" the same length as the biggest value (so every row's
+    full extent is visible and clickable, like a bullet chart), and the
+    actual value bar on top in a single accent colour -- no per-branch
+    qualitative colour-coding, which is what made the rejected Icicle
+    version look arbitrary.
+    """
+    color = color or ACCENT_2
+    track_color = track_color or BORDER
+    n = len(labels)
+    texts = texts if texts is not None else [str(v) for v in values]
+    max_val = max(values) if values else 1.0
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=[max_val] * n, y=labels, orientation="h",
+        marker=dict(color=track_color), hoverinfo="skip", showlegend=False,
+    ))
+    fig.add_trace(go.Bar(
+        x=values, y=labels, orientation="h",
+        marker=dict(color=color), text=texts, textposition="outside",
+        hovertemplate="%{y}<br>%{text}<extra></extra>", showlegend=False,
+    ))
+    fig.update_layout(
+        barmode="overlay",
+        height=height or max(130, 44 * n + 50),
+        margin=dict(t=10, l=10, r=70, b=10),
+        yaxis=dict(autorange="reversed", showgrid=False),
+        xaxis=dict(visible=False, range=[0, max_val * 1.22 if max_val else 1]),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=13),
+        bargap=0.3,
+        clickmode="event+select",
+    )
+    return fig
+
+
+def clicked_bar_label(event):
+    """Pull the category label (the clicked row's y-value) out of a Plotly
+    selection event from st.plotly_chart(..., on_select="rerun", ...), or
+    None if nothing is currently selected.
+
+    Tolerant of `event`, `.selection`, or `.selection.points` being
+    missing/falsy, and of each point being a plain dict or an
+    attribute-style object -- so it's safe to call every rerun regardless
+    of selection state, and easy to unit test with a plain stand-in object
+    instead of a real Streamlit widget."""
+    selection = getattr(event, "selection", None) if event is not None else None
+    points = getattr(selection, "points", None) if selection is not None else None
+    if not points:
+        return None
+    point = points[0]
+    if isinstance(point, dict):
+        return point.get("y")
+    return getattr(point, "y", None)
