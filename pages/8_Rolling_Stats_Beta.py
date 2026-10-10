@@ -2,7 +2,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src import data, indicators
+from src import data, indicators, instruments
 from src.common import bootstrap
 from src.theme import ACCENT, ACCENT_2, MUTED
 
@@ -11,10 +11,12 @@ bootstrap("Rolling Stats & Beta", "🧮")
 st.title("🧮 Rolling Volatility, Beta & Correlation")
 st.caption(
     "Reproduces DoR_Template.xlsx's rolling-volatility and beta/correlation sheets -- benchmarked against "
-    "the JSE All Share and JSE Top 40 indices rather than the template's original US benchmarks."
+    "the JSE All Share and JSE Top 40 indices rather than the template's original US benchmarks. Works "
+    "for a JSE index too (pick \"Index\" as the sector filter) -- e.g. the Top 40's own beta against the "
+    "All Share."
 )
 
-universe = data.load_universe()
+universe = instruments.with_indices(data.load_universe())
 
 c1, c2, c3, c4 = st.columns([1.3, 2, 1, 1])
 with c1:
@@ -23,12 +25,13 @@ with c2:
     sector_filter = st.selectbox("Sector filter", ["All sectors"] + sorted(universe["gics_sector"].unique()))
     stock_universe = universe if sector_filter == "All sectors" else universe[universe["gics_sector"] == sector_filter]
 with c3:
-    label_to_ticker = {f"{r['symbol']} — {r['name']}": r["yf_ticker"] for _, r in stock_universe.iterrows()}
-    if not label_to_ticker:
+    label_to_row = {f"{r['symbol']} — {r['name']}": r for _, r in stock_universe.iterrows()}
+    if not label_to_row:
         st.warning("No stocks in this sector.")
         st.stop()
-    choice = st.selectbox("Stock", options=sorted(label_to_ticker.keys()))
-    ticker = label_to_ticker[choice]
+    choice = st.selectbox("Stock / index", options=sorted(label_to_row.keys()))
+    row = label_to_row[choice]
+    ticker = row["yf_ticker"]
 with c4:
     history_period = st.selectbox("History", ["3y", "5y", "10y", "max"], index=2)
 
@@ -39,11 +42,11 @@ def _get_hist(t, period):
 
 
 with st.spinner("Fetching price history for the stock and benchmarks..."):
-    stock_raw = _get_hist(ticker, history_period)
+    stock_raw = instruments.get_history_for_row(row, period=history_period, interval="1d")
     bench_raw = {name: _get_hist(t, history_period) for name, t in data.BENCHMARKS.items()}
 
 if stock_raw.empty:
-    st.error(f"No price data available for {ticker}.")
+    st.error(f"No price data available for {choice.split(' — ')[0]}.")
     st.stop()
 
 missing_benchmarks = [name for name, df in bench_raw.items() if df.empty]
