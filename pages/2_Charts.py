@@ -3,7 +3,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from src import data, indicators
+from src import data, indicators, instruments
 from src.common import bootstrap
 from src.theme import ACCENT, ACCENT_2, DOWN, MUTED, UP
 from src.ui import range_bar_html
@@ -12,16 +12,19 @@ bootstrap("Charts", "📈")
 
 st.title("📈 Price Chart")
 
-universe = data.load_universe()
+universe = instruments.with_indices(data.load_universe())
 
 # --------------------------------------------------------------------------
-# Stock picker
+# Stock / index picker -- JSE indices (Top 40, All Share, sector/industry
+# indices with a known Yahoo Finance ticker) are included alongside stocks;
+# see src/instruments.py for which ones and why.
 # --------------------------------------------------------------------------
 c1, c2, c3 = st.columns([2, 1, 1])
 with c1:
-    label_to_ticker = {f"{r['symbol']} — {r['name']}": r["yf_ticker"] for _, r in universe.iterrows()}
-    choice = st.selectbox("Stock", options=sorted(label_to_ticker.keys()))
-    ticker = label_to_ticker[choice]
+    label_to_row = {f"{r['symbol']} — {r['name']}": r for _, r in universe.iterrows()}
+    choice = st.selectbox("Stock / index", options=sorted(label_to_row.keys()))
+    row = label_to_row[choice]
+    ticker = row["yf_ticker"]
 with c2:
     period = st.selectbox("Period", ["6mo", "1y", "2y", "5y", "10y", "max"], index=2)
 with c3:
@@ -45,12 +48,13 @@ with c8:
 with c9:
     show_trendlines = st.checkbox("Trend lines")
 
-df = data.get_history(ticker, period=period, interval=interval)
+df = instruments.get_history_for_row(row, period=period, interval=interval)
 
 if df.empty:
     st.error(
-        f"No price data available for {ticker}. This can happen for illiquid/micro-cap JSE names "
-        "with thin Yahoo Finance coverage, or if Yahoo Finance couldn't be reached."
+        f"No price data available for {choice.split(' — ')[0]}. This can happen for illiquid/micro-cap "
+        "JSE names with thin Yahoo Finance coverage, an index whose candidate ticker(s) aren't reachable "
+        "from here, or if Yahoo Finance couldn't be reached at all."
     )
     st.stop()
 
@@ -123,7 +127,7 @@ st.download_button(
 # whatever period/interval is selected for the chart above.
 # --------------------------------------------------------------------------
 st.markdown("**Period returns**")
-max_hist = data.get_history(ticker, period="max", interval="1d")
+max_hist = instruments.get_history_for_row(row, period="max", interval="1d")
 preturns = indicators.period_returns(max_hist["Close"]) if not max_hist.empty else {}
 if preturns:
     pills = []
