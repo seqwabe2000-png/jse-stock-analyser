@@ -347,13 +347,27 @@ with tab_atrp:
 with tab_beta:
     st.caption(
         "Sizes a long basket against a short basket so that beta-weighted dollars match on both sides -- "
-        "removing market risk, not sector/style/single-stock risk. This tab is self-contained (it doesn't "
-        "use the stock/pair chosen in step ① above) -- enter your own tickers and betas below. Betas "
-        "aren't computed here: estimate each as the slope of a regression of the stock's returns on an "
-        "index's returns (e.g. weekly or daily over 2-5 years against the JSE All Share or Capped SWIX), "
-        "or take them from a data provider, using the same index/period for every stock. Costs (borrow, "
+        "removing market risk, not sector/style/single-stock risk. **Pair-by-Pair** auto-fills its first row "
+        "from the stock/pair chosen in step ① above (beta estimated automatically -- see below); **Basket "
+        "Calculator** is self-contained, since a basket's many stocks don't map onto a single step ① "
+        "selection -- enter its tickers and betas directly. Betas can also always be overridden/typed by "
+        "hand: the slope of a regression of the stock's returns on an index's returns (e.g. weekly or daily "
+        "over 2-5 years against the JSE All Share), or a figure from a data provider. Costs (borrow, "
         "financing, margin, spreads, rebalancing) aren't modelled. General calculation aid, not investment advice."
     )
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _bn_benchmark_returns(period):
+        bench_raw = data.get_history(data.BENCHMARKS["JSE All Share"], period=period, interval="1d")
+        if bench_raw is None or bench_raw.empty:
+            return pd.Series(dtype=float)
+        return indicators.compute_returns(bench_raw)["C-C Return"]
+
+    def _bn_auto_beta(price_df, bench_ret):
+        if price_df is None or price_df.empty or bench_ret.empty:
+            return None
+        stock_ret = indicators.compute_returns(price_df)["C-C Return"]
+        return indicators.full_period_beta(stock_ret, bench_ret)
     bn_mode = st.radio(
         "Layout", ["Basket Calculator", "Pair-by-Pair"], horizontal=True, key="bn_mode",
         help="Basket Calculator: one or more stocks per side, sized as a basket. Pair-by-Pair: each row is "
@@ -464,15 +478,47 @@ with tab_beta:
         with pp2:
             bn_pp_capital = st.number_input("Total capital (R)", min_value=0.0, value=100_000.0, step=10_000.0, key="bn_pp_capital")
 
+        # Auto-fill row 1 from whatever's picked in step ① -- only when that
+        # selection actually changes, so rows the user has since added/edited
+        # by hand aren't clobbered on every rerun.
+        if trade_type == "Pairs trade (spread)":
+            auto_long_ticker, auto_short_ticker = row_long["symbol"], row_short["symbol"]
+            bench_ret = _bn_benchmark_returns(history_period)
+            auto_long_beta = _bn_auto_beta(raw_long, bench_ret)
+            auto_short_beta = _bn_auto_beta(raw_short, bench_ret)
+        else:
+            auto_long_ticker, auto_short_ticker = row["symbol"], ""
+            bench_ret = _bn_benchmark_returns(history_period)
+            auto_long_beta = _bn_auto_beta(raw, bench_ret)
+            auto_short_beta = None
+
+        # A data_editor's session-state key becomes "widget-owned" once it's
+        # rendered, and Streamlit then refuses any direct assignment to that
+        # key (by design -- it can't safely reconcile an external overwrite
+        # against in-grid edits). So instead of overwriting the same key,
+        # bump to a brand-new key whenever the auto-fill source changes --
+        # a fresh key has no prior widget state, so passing its starting
+        # value is just an ordinary (allowed) widget default. Reruns that
+        # *don't* change step ① keep the same key, so Streamlit keeps
+        # whatever the user has since edited in the grid instead of
+        # resetting it.
+        auto_src = (trade_type, auto_long_ticker, auto_short_ticker, history_period)
+        if st.session_state.get("bn_pairs_auto_src") != auto_src:
+            st.session_state["bn_pairs_auto_src"] = auto_src
+            st.session_state["bn_pairs_version"] = st.session_state.get("bn_pairs_version", 0) + 1
+        editor_key = f"bn_pairs_editor_{st.session_state.get('bn_pairs_version', 1)}"
+
+        bn_pairs_default = pd.DataFrame(
+            {
+                "long_ticker": [auto_long_ticker], "long_beta": [auto_long_beta],
+                "short_ticker": [auto_short_ticker], "short_beta": [auto_short_beta],
+                "slot_override": [None],
+            }
+        )
+
         bn_pairs_df = st.data_editor(
-            pd.DataFrame(
-                {
-                    "long_ticker": [""], "long_beta": [None],
-                    "short_ticker": [""], "short_beta": [None],
-                    "slot_override": [None],
-                }
-            ),
-            num_rows="dynamic", key="bn_pairs_editor", width="stretch",
+            bn_pairs_default,
+            num_rows="dynamic", key=editor_key, width="stretch",
             column_config={
                 "long_ticker": st.column_config.TextColumn("Long stock"),
                 "long_beta": st.column_config.NumberColumn("Long beta", format="%.2f"),
@@ -485,8 +531,10 @@ with tab_beta:
             },
         )
         st.caption(
-            "One row per long/short pair. For an index hedge, put the index (e.g. the JSE Top 40) as the "
-            "short leg with beta 1.00."
+            "Row 1 is auto-filled from step ① (ticker + beta vs. the JSE All Share over the same history "
+            "period) and refreshes whenever you change the stock/pair up there -- edit any cell, or add more "
+            "rows, to go beyond that. For an index hedge, put the index (e.g. the JSE Top 40) as the short "
+            "leg; its beta auto-fills like any other instrument since it has real price history too."
         )
 
         bn_pp_res = ps.pair_by_pair(bn_pairs_df, default_slot=bn_default_slot, total_capital=bn_pp_capital)
