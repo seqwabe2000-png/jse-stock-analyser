@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src import data, indicators, pairs
+from src import position_sizing as ps
 from src.common import bootstrap
 from src.theme import ACCENT, ACCENT_2, DOWN, MUTED, UP
 from src.ui import percentile_grid_html
@@ -120,8 +121,10 @@ st.divider()
 # --------------------------------------------------------------------------
 # Step 2 -- method tabs
 # --------------------------------------------------------------------------
-st.subheader("② Pick a method and set your risk:reward")
-tab_dor, tab_atrp = st.tabs(["📊 DoR method (percentile-based)", "📈 ATRP method (volatility-based)"])
+st.subheader("② Pick a tool")
+tab_dor, tab_atrp, tab_beta = st.tabs(
+    ["📊 DoR method (percentile-based)", "📈 ATRP method (volatility-based)", "⚖️ Beta-Neutral Sizing"]
+)
 
 # ==========================================================================
 # DoR method
@@ -330,3 +333,178 @@ with tab_atrp:
                     disp2 = (atrp_quarterly if trade_type == "Single stock" else atrp_quarterly_long).copy()
                     disp2["Avg True Range %"] = disp2["Avg True Range %"].map(lambda x: f"{x:.3%}" if x == x else "—")
                     st.dataframe(disp2, hide_index=True, width="stretch")
+
+# ==========================================================================
+# Beta-Neutral Sizing (reproduces beta_neutral_template.xlsx)
+# ==========================================================================
+with tab_beta:
+    st.caption(
+        "Sizes a long basket against a short basket so that beta-weighted dollars match on both sides -- "
+        "removing market risk, not sector/style/single-stock risk. This tab is self-contained (it doesn't "
+        "use the stock/pair chosen in step ① above) -- enter your own tickers and betas below. Betas "
+        "aren't computed here: estimate each as the slope of a regression of the stock's returns on an "
+        "index's returns (e.g. weekly or daily over 2-5 years against the JSE All Share or Capped SWIX), "
+        "or take them from a data provider, using the same index/period for every stock. Costs (borrow, "
+        "financing, margin, spreads, rebalancing) aren't modelled. General calculation aid, not investment advice."
+    )
+    bn_mode = st.radio(
+        "Layout", ["Basket Calculator", "Pair-by-Pair"], horizontal=True, key="bn_mode",
+        help="Basket Calculator: one or more stocks per side, sized as a basket. Pair-by-Pair: each row is "
+        "its own long/short pair with its own gross 'slot' -- use this when you want fixed dollar slots per pair.",
+    )
+
+    # ----------------------------------------------------------------------
+    # Basket Calculator
+    # ----------------------------------------------------------------------
+    if bn_mode == "Basket Calculator":
+        st.markdown("##### Inputs")
+        bc1, bc2, bc3 = st.columns(3)
+        with bc1:
+            bn_gross = st.number_input(
+                "Gross exposure budget (long + short, R)", min_value=0.0, value=1_000_000.0, step=50_000.0, key="bn_gross",
+            )
+        with bc2:
+            bn_capital = st.number_input(
+                "Total capital, for cash left (R)", min_value=0.0, value=1_200_000.0, step=50_000.0, key="bn_capital",
+            )
+        with bc3:
+            bn_weighting = st.radio(
+                "Weighting within each side", ["Equal", "Custom"], horizontal=True, key="bn_weighting",
+                help="Equal = every stock on a side gets the same share. Custom = use each row's own weight "
+                "below (auto-normalised across that side).",
+            )
+
+        col_config = {
+            "ticker": st.column_config.TextColumn("Stock / ticker"),
+            "beta": st.column_config.NumberColumn("Beta", format="%.2f"),
+            "custom_weight": st.column_config.NumberColumn(
+                "Custom weight (optional)", format="%.2f",
+                help="Only used in Custom mode; auto-normalised against the other rows on this side.",
+            ),
+        }
+        bcc1, bcc2 = st.columns(2)
+        with bcc1:
+            st.markdown("**Long side**")
+            bn_long_df = st.data_editor(
+                pd.DataFrame({"ticker": ["", ""], "beta": [None, None], "custom_weight": [None, None]}),
+                num_rows="dynamic", key="bn_long_editor", width="stretch", column_config=col_config,
+            )
+        with bcc2:
+            st.markdown("**Short side**")
+            bn_short_df = st.data_editor(
+                pd.DataFrame({"ticker": ["", ""], "beta": [None, None], "custom_weight": [None, None]}),
+                num_rows="dynamic", key="bn_short_editor", width="stretch", column_config=col_config,
+            )
+        st.caption("Add or remove rows as needed -- the template capped each side at 8, but this works for any number.")
+
+        bn_res = ps.basket_calculator(bn_long_df, bn_short_df, bn_gross, weighting=bn_weighting, total_capital=bn_capital)
+
+        st.divider()
+        st.markdown("##### Results")
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Long basket beta", f"{bn_res['beta_long']:.2f}")
+        r2.metric("Short basket beta", f"{bn_res['beta_short']:.2f}")
+        r3.metric("Net beta exposure", f"{bn_res['net_beta']:+.2f}", help="Should be ~zero.")
+
+        r4, r5, r6 = st.columns(3)
+        r4.metric("Long dollars (L)", f"R{bn_res['long_dollars']:,.0f}", help="L = G × β_short ÷ (β_long + β_short)")
+        r5.metric("Short dollars (S)", f"R{bn_res['short_dollars']:,.0f}", help="S = G × β_long ÷ (β_long + β_short)")
+        r6.metric("Long share of gross", f"{bn_res['long_share_of_gross']:.0%}")
+
+        r7, r8, r9 = st.columns(3)
+        r7.metric("Net dollar exposure (long − short)", f"R{bn_res['net_dollar_exposure']:,.0f}")
+        r8.metric("Gross exposure (long + short)", f"R{bn_res['gross_exposure']:,.0f}")
+        r9.metric("Cash left", f"R{bn_res['cash_left']:,.0f}" if bn_res["cash_left"] is not None else "—")
+
+        st.markdown("###### Position per stock")
+        pcol1, pcol2 = st.columns(2)
+
+        def _fmt_positions(df):
+            disp = df[["ticker", "beta", "weight", "position", "beta_weighted"]].copy()
+            disp.columns = ["Stock / ticker", "Beta", "Effective weight", "Position (R)", "Beta-weighted (R)"]
+            disp["Effective weight"] = disp["Effective weight"].map(lambda x: f"{x:.1%}")
+            disp["Position (R)"] = disp["Position (R)"].map(lambda x: f"R{x:,.0f}")
+            disp["Beta-weighted (R)"] = disp["Beta-weighted (R)"].map(lambda x: f"R{x:,.0f}")
+            return disp
+
+        with pcol1:
+            st.caption("Long side")
+            st.dataframe(_fmt_positions(bn_res["long_df"]), hide_index=True, width="stretch")
+        with pcol2:
+            st.caption("Short side")
+            st.dataframe(_fmt_positions(bn_res["short_df"]), hide_index=True, width="stretch")
+
+        st.markdown("###### Checks")
+        for _label, _ok in bn_res["checks"].items():
+            if _ok is None:
+                st.caption(f"◽ {_label}: n/a")
+            elif _ok:
+                st.caption(f"✅ {_label}: OK")
+            else:
+                st.caption(f"⚠️ {_label}: CHECK")
+
+    # ----------------------------------------------------------------------
+    # Pair-by-Pair
+    # ----------------------------------------------------------------------
+    else:
+        st.markdown("##### Inputs")
+        pp1, pp2 = st.columns(2)
+        with pp1:
+            bn_default_slot = st.number_input(
+                "Default gross slot per pair (R)", min_value=0.0, value=10_000.0, step=1_000.0, key="bn_default_slot",
+                help="Used for any row where \"Slot override\" is blank.",
+            )
+        with pp2:
+            bn_pp_capital = st.number_input("Total capital (R)", min_value=0.0, value=100_000.0, step=10_000.0, key="bn_pp_capital")
+
+        bn_pairs_df = st.data_editor(
+            pd.DataFrame(
+                {
+                    "long_ticker": [""], "long_beta": [None],
+                    "short_ticker": [""], "short_beta": [None],
+                    "slot_override": [None],
+                }
+            ),
+            num_rows="dynamic", key="bn_pairs_editor", width="stretch",
+            column_config={
+                "long_ticker": st.column_config.TextColumn("Long stock"),
+                "long_beta": st.column_config.NumberColumn("Long beta", format="%.2f"),
+                "short_ticker": st.column_config.TextColumn("Short stock"),
+                "short_beta": st.column_config.NumberColumn("Short beta", format="%.2f"),
+                "slot_override": st.column_config.NumberColumn(
+                    "Slot override (optional, R)", format="%.0f",
+                    help="Leave blank to use the default gross slot per pair above.",
+                ),
+            },
+        )
+        st.caption(
+            "One row per long/short pair. For an index hedge, put the index (e.g. the JSE Top 40) as the "
+            "short leg with beta 1.00."
+        )
+
+        bn_pp_res = ps.pair_by_pair(bn_pairs_df, default_slot=bn_default_slot, total_capital=bn_pp_capital)
+
+        st.divider()
+        st.markdown("##### Summary")
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Gross exposure (long + short)", f"R{bn_pp_res['gross_exposure']:,.0f}")
+        s2.metric("Cash left", f"R{bn_pp_res['cash_left']:,.0f}" if bn_pp_res["cash_left"] is not None else "—")
+        s3.metric("Net beta exposure", f"{bn_pp_res['net_beta']:+.2f}", help="Should be ~zero across all pairs.")
+
+        st.markdown("###### Per-pair detail")
+        disp_pp = bn_pp_res["rows"][
+            ["long_ticker", "long_beta", "short_ticker", "short_beta", "slot_used", "long_position", "short_position", "beta_check"]
+        ].copy()
+        disp_pp.columns = [
+            "Long", "Long β", "Short", "Short β", "Slot used (R)", "Long position (R)", "Short position (R)", "Beta check",
+        ]
+        for _col in ["Slot used (R)", "Long position (R)", "Short position (R)"]:
+            disp_pp[_col] = disp_pp[_col].map(lambda x: f"R{x:,.0f}")
+        st.dataframe(disp_pp, hide_index=True, width="stretch")
+
+        st.markdown("###### Checks")
+        for _label, _ok in bn_pp_res["checks"].items():
+            if _ok:
+                st.caption(f"✅ {_label}: OK")
+            else:
+                st.caption(f"⚠️ {_label}: CHECK")
