@@ -57,6 +57,15 @@ if search:
 
 st.caption(f"{len(filtered)} of {len(universe)} instruments match your filters.")
 
+# A display-friendly company name for the two charts below's individual-stock
+# labels -- ticker is still the unambiguous key for grouping/ids everywhere,
+# but the name reads far better on a bar/tile than a bare ticker. A handful
+# of JSE companies have more than one listed share class under the same
+# name (e.g. Investec Group trades as both INL and INP) -- those get the
+# ticker appended so the two don't look like duplicates of each other.
+filtered = filtered.copy()
+filtered["display_name"] = treeviz.disambiguated_names(filtered)
+
 tab_table, tab_tree, tab_map = st.tabs(["📋 Table", "🌳 Market Cap Breakdown", "🗺️ Performance Map"])
 
 # --------------------------------------------------------------------------
@@ -239,7 +248,7 @@ with tab_tree:
                 if sel2 is not None:
                     scope2 = scope1[scope1[path[1]].astype(str) == sel2]
                     st.divider()
-                    labels3, values3, omitted3 = treeviz.ranked_groups(scope2, "symbol", "market_cap_zar", MAX_BARS)
+                    labels3, values3, omitted3 = treeviz.ranked_groups(scope2, "display_name", "market_cap_zar", MAX_BARS)
                     st.caption(f"**{sel1} → {sel2}**, individual stocks:")
                     fig3 = treeviz.drilldown_bar_figure(labels3, values3, [treeviz.format_rand(v) for v in values3])
                     st.plotly_chart(fig3, width="stretch", key="tree_chart_lvl3")
@@ -248,7 +257,7 @@ with tab_tree:
             else:
                 # Single-dimension path (e.g. "Industry → Stock"): level 2 is
                 # already the individual stocks, no further drill needed.
-                labels2, values2, omitted2 = treeviz.ranked_groups(scope1, "symbol", "market_cap_zar", MAX_BARS)
+                labels2, values2, omitted2 = treeviz.ranked_groups(scope1, "display_name", "market_cap_zar", MAX_BARS)
                 st.caption(f"**{sel1}**, individual stocks:")
                 fig2 = treeviz.drilldown_bar_figure(labels2, values2, [treeviz.format_rand(v) for v in values2])
                 st.plotly_chart(fig2, width="stretch", key="tree_chart_lvl2_leaf")
@@ -308,7 +317,7 @@ with tab_map:
                 map_df,
                 path=["gics_sector", "industry"],
                 leaf_id_col="symbol",
-                leaf_label_col="symbol",
+                leaf_label_col="display_name",
                 value_col="market_cap_zar",
                 color_col="pct_change",
                 root_label=f"JSE ({len(map_df)} stocks)",
