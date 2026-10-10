@@ -124,6 +124,19 @@ def resolve_index_ticker(candidates, min_points: int = 20):
     return None, None
 
 
+def resolve_index_ohlc(candidates, period: str = "max", min_points: int = 20):
+    """Same resolution order as resolve_index_ticker, but returns the full
+    OHLC frame (not just Close) for the first candidate that works -- used
+    wherever more than a price line is needed, e.g. True Range % (ATRP),
+    which needs High/Low too. Returns (df, ticker_used), or (None, None) if
+    every candidate fails."""
+    for t in candidates:
+        df = data.get_history(t, period=period, interval="1d")
+        if df is not None and not df.empty and len(df) >= min_points:
+            return df, t
+    return None, None
+
+
 MAX_DAILY_MOVE = 5.0  # clip any single stock's daily return to [-95%, +500%]
 
 
