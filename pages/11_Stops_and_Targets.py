@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src import data, indicators, pairs
+from src import data, indicators, instruments, pairs
 from src import position_sizing as ps
 from src.common import bootstrap
 from src.theme import ACCENT, ACCENT_2, DOWN, MUTED, UP
@@ -30,15 +30,19 @@ st.markdown(
 )
 st.write("")
 
-universe = data.load_universe()
+universe = instruments.with_indices(data.load_universe())
 label_to_row = {f"{r['symbol']} — {r['name']}": r for _, r in universe.iterrows()}
 labels = sorted(label_to_row.keys())
 
 RESAMPLE = {"Daily": None, "Weekly": "W", "Monthly": "M"}
 
 
-def _hist(ticker, period="max"):
-    return data.get_history(ticker, period=period, interval="1d")
+def _hist(row, period="max"):
+    # Indices with no real OHLC ticker (only a constructed-proxy return
+    # series -- see src/instruments.py) aren't offered in this picker at
+    # all, since the ATRP tab below needs real High/Low, which only a
+    # genuine price series can give.
+    return instruments.get_history_for_row(row, period=period, interval="1d")
 
 
 # --------------------------------------------------------------------------
@@ -50,7 +54,7 @@ trade_type = st.radio("Trade type", ["Single stock", "Pairs trade (spread)"], ho
 if trade_type == "Single stock":
     c1, c2, c3 = st.columns([2, 1, 1])
     with c1:
-        choice = st.selectbox("Stock", options=labels, key="st_single_stock")
+        choice = st.selectbox("Stock / index", options=labels, key="st_single_stock")
         row = label_to_row[choice]
     with c2:
         direction = st.radio("Direction", ["Long", "Short"], horizontal=True, key="st_direction")
@@ -58,7 +62,7 @@ if trade_type == "Single stock":
         history_period = st.selectbox("History", ["5y", "10y", "max"], index=1, key="st_history")
 
     with st.spinner(f"Fetching {row['symbol']}'s price history..."):
-        raw = _hist(row["yf_ticker"], history_period)
+        raw = _hist(row, history_period)
     if raw.empty:
         st.error(f"No price data available for {row['symbol']}.")
         st.stop()
@@ -74,10 +78,13 @@ if trade_type == "Single stock":
 else:
     c1, c2 = st.columns(2)
     with c1:
-        label_long = st.selectbox("Long leg (stock A)", labels, index=0, key="st_long")
+        label_long = st.selectbox("Long leg (stock / index A)", labels, index=0, key="st_long")
     with c2:
         default_short_idx = 1 if len(labels) > 1 else 0
-        label_short = st.selectbox("Short leg (stock B)", labels, index=default_short_idx, key="st_short")
+        label_short = st.selectbox(
+            "Short leg (stock / index B)", labels, index=default_short_idx, key="st_short",
+            help="For an index hedge, pick the index here (e.g. the Top 40 or All Share).",
+        )
     row_long, row_short = label_to_row[label_long], label_to_row[label_short]
 
     if row_long["yf_ticker"] == row_short["yf_ticker"]:
@@ -99,8 +106,8 @@ else:
     weight_long, weight_short = long_exposure / total_exposure, short_exposure / total_exposure
 
     with st.spinner("Fetching price history for both legs..."):
-        raw_long = _hist(row_long["yf_ticker"], history_period)
-        raw_short = _hist(row_short["yf_ticker"], history_period)
+        raw_long = _hist(row_long, history_period)
+        raw_short = _hist(row_short, history_period)
     if raw_long.empty or raw_short.empty:
         st.error("Couldn't get price data for one or both legs.")
         st.stop()
