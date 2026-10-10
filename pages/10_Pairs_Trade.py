@@ -5,7 +5,7 @@ import streamlit as st
 from dateutil.relativedelta import relativedelta
 from plotly.subplots import make_subplots
 
-from src import data, indicators, pairs
+from src import data, indicators, instruments, pairs
 from src import relative_performance as rp
 from src.common import bootstrap
 from src.theme import ACCENT, ACCENT_2, DOWN, MUTED, UP
@@ -14,28 +14,30 @@ bootstrap("Pairs Trade", "⚖️")
 
 st.title("⚖️ Pairs Trade")
 st.caption(
-    "Pick two stocks to analyse as a pairs-trade candidate: normalized performance overlay, price "
-    "ratio (spread), rolling correlation, rolling z-score of the spread, and a cointegration + "
-    "mean-reversion half-life check. These are standard statistical diagnostics, not a signal to "
-    "trade on by themselves -- not investment advice."
+    "Pick two stocks (or a JSE index as one leg -- useful for an index-hedge pair) to analyse as a "
+    "pairs-trade candidate: normalized performance overlay, price ratio (spread), rolling correlation, "
+    "rolling z-score of the spread, and a cointegration + mean-reversion half-life check. These are "
+    "standard statistical diagnostics, not a signal to trade on by themselves -- not investment advice."
 )
 
 universe = data.load_universe()
-label_to_row = {f"{r['symbol']} — {r['name']}": r for _, r in universe.iterrows()}
+combined_universe = instruments.with_indices(universe)
+label_to_row = {f"{r['symbol']} — {r['name']}": r for _, r in combined_universe.iterrows()}
 labels = sorted(label_to_row.keys())
+stock_labels = sorted(f"{r['symbol']} — {r['name']}" for _, r in universe.iterrows())
 
 c1, c2 = st.columns(2)
 with c1:
-    label_a = st.selectbox("Stock A", labels, index=0, key="pt_a")
+    label_a = st.selectbox("Stock / index A", labels, index=0, key="pt_a")
 with c2:
     default_b_idx = 1 if len(labels) > 1 else 0
-    label_b = st.selectbox("Stock B", labels, index=default_b_idx, key="pt_b")
+    label_b = st.selectbox("Stock / index B", labels, index=default_b_idx, key="pt_b")
 
 row_a, row_b = label_to_row[label_a], label_to_row[label_b]
 
 extra_labels = st.multiselect(
     "Also show on the overlay chart (not included in the spread/correlation/cointegration stats below)",
-    [l for l in labels if l not in (label_a, label_b)] + list(rp.BROAD_INDEX_CANDIDATES.keys()),
+    [l for l in stock_labels if l not in (label_a, label_b)] + list(rp.BROAD_INDEX_CANDIDATES.keys()),
     key="pt_extra",
 )
 
@@ -75,11 +77,11 @@ def _hist_lookup(tickers):
 
 
 with st.spinner("Fetching price history..."):
-    hist = _hist_lookup([row_a["yf_ticker"], row_b["yf_ticker"]])
-    df_a, df_b = hist.get(row_a["yf_ticker"]), hist.get(row_b["yf_ticker"])
+    df_a = instruments.get_history_for_row(row_a, period="max", interval="1d")
+    df_b = instruments.get_history_for_row(row_b, period="max", interval="1d")
 
 if df_a is None or df_a.empty or df_b is None or df_b.empty:
-    st.error("Couldn't get price data for one or both stocks -- check `python3 scripts/test_data_connection.py`.")
+    st.error("Couldn't get price data for one or both legs -- check `python3 scripts/test_data_connection.py`.")
     st.stop()
 
 resample_freq = {"Daily": None, "Weekly": "W", "Monthly": "M"}[frequency]
