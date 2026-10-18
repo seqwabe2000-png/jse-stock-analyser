@@ -27,7 +27,12 @@ with c3:
     if not label_to_row:
         st.warning("No stocks in this sector.")
         st.stop()
-    choice = st.selectbox("Stock / index", options=sorted(label_to_row.keys()))
+    if st.session_state.get("atrp_instrument") not in label_to_row:
+        st.session_state.pop("atrp_instrument", None)  # e.g. not in this sector filter -- fall back to default
+    choice = st.selectbox(
+        "Stock / index", options=sorted(label_to_row.keys()), key="atrp_instrument",
+        help="Remembers your last pick on this page -- switching to another page and back won't reset it.",
+    )
     row = label_to_row[choice]
     ticker = row["yf_ticker"]
 with c4:
