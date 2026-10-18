@@ -40,7 +40,12 @@ with c2:
     if not label_to_row:
         st.warning("No stocks in this sector.")
         st.stop()
-    choice = st.selectbox("Stock", options=sorted(label_to_row.keys()))
+    if st.session_state.get("event_study_instrument") not in label_to_row:
+        st.session_state.pop("event_study_instrument", None)  # e.g. not in this sector filter -- fall back to default
+    choice = st.selectbox(
+        "Stock", options=sorted(label_to_row.keys()), key="event_study_instrument",
+        help="Remembers your last pick on this page -- switching to another page and back won't reset it.",
+    )
     row = label_to_row[choice]
 
 with st.expander("⚙️ Advanced settings (optional — the defaults work well for most stocks)"):
