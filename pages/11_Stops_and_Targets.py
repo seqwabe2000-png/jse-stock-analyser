@@ -54,7 +54,10 @@ trade_type = st.radio("Trade type", ["Single stock", "Pairs trade (spread)"], ho
 if trade_type == "Single stock":
     c1, c2, c3 = st.columns([2, 1, 1])
     with c1:
-        choice = st.selectbox("Stock / index", options=labels, key="st_single_stock")
+        choice = st.selectbox(
+            "Stock / index", options=labels, key="stops_instrument",
+            help="Remembers your last pick on this page -- switching to another page and back won't reset it.",
+        )
         row = label_to_row[choice]
     with c2:
         direction = st.radio("Direction", ["Long", "Short"], horizontal=True, key="st_direction")
