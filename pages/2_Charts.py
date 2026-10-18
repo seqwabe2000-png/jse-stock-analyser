@@ -22,7 +22,10 @@ universe = instruments.with_indices(data.load_universe())
 c1, c2, c3 = st.columns([2, 1, 1])
 with c1:
     label_to_row = {f"{r['symbol']} — {r['name']}": r for _, r in universe.iterrows()}
-    choice = st.selectbox("Stock / index", options=sorted(label_to_row.keys()))
+    choice = st.selectbox(
+        "Stock / index", options=sorted(label_to_row.keys()), key="charts_instrument",
+        help="Remembers your last pick on this page -- switching to another page and back won't reset it.",
+    )
     row = label_to_row[choice]
     ticker = row["yf_ticker"]
 with c2:
