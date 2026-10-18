@@ -26,13 +26,21 @@ with c1:
     picked = st.selectbox(
         "Pick a JSE stock (optional)",
         options=["(type a company name/ticker below instead)"] + sorted(label_to_name.keys()),
+        key="ba_picked",
+        help="Remembers your last pick on this page -- switching to another page and back won't reset it.",
     )
 with c2:
-    default_company = label_to_name.get(picked, "")
+    # Typing directly is remembered too (key="ba_company") -- but picking a
+    # new stock from the dropdown should still overwrite it, so that only
+    # happens when the dropdown pick itself actually changes, not on every
+    # rerun (which would otherwise stomp on anything typed by hand).
+    if st.session_state.get("ba_last_picked") != picked:
+        st.session_state["ba_last_picked"] = picked
+        st.session_state["ba_company"] = label_to_name.get(picked, "")
     company = st.text_input(
         "Company name / ticker to analyze",
-        value=default_company,
         placeholder="e.g. Capitec Bank Holdings, or a non-JSE company",
+        key="ba_company",
     )
 
 if company.strip():
