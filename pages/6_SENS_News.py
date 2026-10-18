@@ -48,7 +48,12 @@ with c3:
     if not label_to_row:
         st.warning(f"No stocks match \"{search_query}\"." if search_query else "No stocks in this sector.")
         st.stop()
-    choice = st.selectbox("Stock", options=sorted(label_to_row.keys()))
+    if st.session_state.get("sens_instrument") not in label_to_row:
+        st.session_state.pop("sens_instrument", None)  # e.g. not in this search/sector filter -- fall back to default
+    choice = st.selectbox(
+        "Stock", options=sorted(label_to_row.keys()), key="sens_instrument",
+        help="Remembers your last pick on this page -- switching to another page and back won't reset it.",
+    )
     row = label_to_row[choice]
 with c4:
     days = st.slider("Lookback (days)", 7, 180, 60, step=7)
